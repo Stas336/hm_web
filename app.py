@@ -28,12 +28,13 @@ ERR_3 = 3
 
 web.config.debug = False
 
-urls = ('/', 'home', 
+urls = ('/', 'home',
         '/signup', 'signup',
         '/signin', 'signin',
         '/mod/create', 'mod_create',
+        '/mod/edit/.*', 'mod_edit',
         '/mod', 'mod',
-        '/deck', 'deck',
+        '/deck/.*', 'deck_edit',
         '/faq', 'faq',
         '/rss', 'rss',
         '/ladder', 'ladder'
@@ -47,16 +48,19 @@ session = web.session.Session(app, store, initializer={'login': 0})
 
 cb = Bucket('couchbase://localhost/hbs', password='aci')
 
-chlog = ['gameclient', 'lobbyserver', 'gameserver', 'database', 'web']
-
-############
-
 def rand(num):
     return ''.join([random.choice(string.ascii_letters + string.digits) for n in xrange(num)])
 
 class faq:
     def GET(self):
         return render.base(session, render.faq(), [], [])
+
+class mod_edit:
+    def GET(self):
+        s =  web.ctx['path'].split("/")
+        m = s[len(s) - 1]
+        print m
+        return render.base(session, [], [], [])
 
 class ladder:
     def GET(self):
@@ -70,25 +74,6 @@ class ladder:
 
         return render.base(session, render.ladder(players), [], [])
 
-class rss:
-    def GET(self):
-        p = Popen("ls -la /proc/`ps aux| grep \"hm_gameserver\" | grep -v \"grep\" | awk '{print $2}'`/fd | wc -l", shell=True, stdout=PIPE)
-        out, err = p.communicate()
-
-        p = Popen("ls -la /proc/`ps aux| grep \"hm_lobbyserver\" | grep -v \"grep\" | awk '{print $2}'`/fd | wc -l", shell=True, stdout=PIPE)
-        out1, err1 = p.communicate()
-
-	return "<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\
-<rss version=\"2.0\">\
-<channel>\
-    <title>hearthmod</title>\
-    <item>\
-    <title>[g:%s] [l:%s]</title>\
-    </item>\
-</channel>\
-</rss>" % (out.rstrip('\n'), out1.rstrip('\n'))
-
-
 class home:
     def GET(self):
         return render.base(session, render.home(), [], [])
@@ -98,38 +83,36 @@ class mod:
         print 'mod init'
 
     def POST(self):
-        print web.data()
-        '''
-        j = json.loads(web.data())
+        #try:
+            d = json.loads(web.data())
+            if(len(d['name']) > 0 and len(d['url']) > 0):
+                mod = {'name': d['name'], 'url': d['url'], 'cards': []}
+                cb.upsert('u:mod_%s' % d['name'], mod)
 
-        if(j == None):
-            return -1
+                return 'success'
 
-        print j
-        if(len(j) == 1):
-            if 'modified' in j:
-                return self.modifiedCardTags(j['modified'])
-            elif 'card' in j:
-                return self.cardTags(j['card'], self.e)
-            elif 'remove' in j:
-                return self.enabledCardRemove(j['remove'])
-            elif 'publish' in j:
-                return self.modPublish(j['publish'])
+            return 'fail'
 
-        else:
-            return self.storeLoaded(j)
-        '''
+        #except:
+        #    print 'except'
+        #    return ''
 
     def GET(self):
         if(session.login == 0):
             return render.base(session, render.login_required(), [], [])
 
-        return render.base(session, render.mod(['Defense of the Ancients']), [], [])
+        l = []
+        for result in View(cb, "dev_mods", "mods"):
+            l.append({ "url": result.value["url"], "name": result.value["name"] })
 
-class mod_create:
+        return render.base(session, render.mod(l), [], [])
+
+class mod_edit:
     def __init__(self):
         self.e = xml.etree.ElementTree.parse('cache/c0').getroot()
         self.cards = self.defaultSchema()
+        s =  web.ctx['path'].split("/")
+        self.modname = "u:mod_%s" % s[len(s) - 1]
 
     def defaultSchema(self):
         f = open('cache/cards.basic')
@@ -192,8 +175,8 @@ class mod_create:
 
     def modPublish(self, modName):
         try:
-            print 'publishing mod ' + modName
-            loaded = cb.get('u:mod_woa').value
+            print 'publishing mod ' + self.modname
+            loaded = cb.get(self.modname).value
             names = []
 
             f = open('cache/cards.basic')
@@ -219,7 +202,7 @@ class mod_create:
 
                         enabledCards = self.modCards(new[0][1], atype.findall("Tag"), enabledCards)
                         break
-            f = open("customMod", "w")
+            f = open(self.modname[2:], "w")
             f.write(enabledCards)
             f.close()
 
@@ -233,7 +216,7 @@ class mod_create:
             p3 = f.read()
             f.close()
 
-            f = open("test", "w")
+            f = open("xml_%s" % self.modname[2:], "w")
             f.write(p1 + xmlstr[38:] + p3)
             f.close()
 
@@ -245,13 +228,13 @@ class mod_create:
 
     def enabledCardRemove(self, j):
         try:
-            loaded = cb.get('u:mod_woa').value
+            loaded = cb.get(self.modname).value
             # delete if element exists
             for l in loaded['cards']:
                 if l[0][1] == j:
                     loaded['cards'].remove(l)
                     break
-            cb.upsert('u:mod_woa', loaded)
+            cb.upsert(self.modname, loaded)
 
             names = []
             for l in loaded['cards']:
@@ -260,13 +243,13 @@ class mod_create:
             return json.dumps(names)
 
         except:
-            cb.upsert('u:mod_woa', {"cards": [j]})
+            cb.upsert(self.modname, {"cards": [j]})
 
         return ""
 
     def getStored(self):
         try:
-            x = cb.get('u:mod_woa')
+            x = cb.get(self.modname)
             loaded = x.value
         except:
             return []
@@ -279,18 +262,18 @@ class mod_create:
 
     def storeLoaded(self, j):
         try:
-            loaded = cb.get('u:mod_woa').value
+            loaded = cb.get(self.modname).value
             # replace if element exists
             for l in loaded['cards']:
                 if l[0][1] == j[0][1]:
                     loaded['cards'].remove(l)
                     break
             loaded['cards'].append(j)
-            cb.upsert('u:mod_woa', loaded)
+            cb.upsert(selfmodname, loaded)
         except:
-            cb.upsert('u:mod_woa', {"cards": [j]})
+            cb.upsert(selfmodname, {"cards": [j]})
 
-        loaded = cb.get('u:mod_woa').value
+        loaded = cb.get(self.modname).value
 
         names = []
         for l in loaded['cards']:
@@ -302,7 +285,7 @@ class mod_create:
 
     def modifiedCardTags(self, j):
         #try:
-            loaded = cb.get('u:mod_woa').value
+            loaded = cb.get(self.modname).value
             for l in loaded['cards']:
                 if l[0][1] == j:
                     names = []
@@ -352,7 +335,7 @@ class mod_create:
 
                 result = self.modPublish(j['publish'])
                 if(result == "success"):
-                    os.system("sh test.sh")
+                    os.system("cd script && bash publish.sh")
 
                 return result
 
@@ -435,9 +418,13 @@ class signin:
         return r
 
 class deck:
+    def __init__(self):
+        s =  web.ctx['path'].split("/")
+        self.modname = s[len(s) - 1]
+
     def save_deck(self, arr):
 
-        out = cb.set('u:deck_%s' % session.secret, arr)
+        out = cb.set('u:deck_%s_%s' % (self.modname, session.secret), arr)
 
         return ERR_0
 
@@ -447,7 +434,7 @@ class deck:
             return render.base(session, render.login_required(), [], [])
 
         cards = []
-        loaded = cb.get('u:mod_woa').value
+        loaded = cb.get('u:mod_%s' % self.modname).value
         for l in loaded['cards']:
             names = []
             enabled = 0
@@ -472,7 +459,7 @@ class deck:
                 cards.append(names)
 
         try:
-            loaded = cb.get('u:deck_%s' % session.secret).value
+            loaded = cb.get('u:deck_%s_%s' % (self.modname, session.secret)).value
         except:
             loaded = {}
 

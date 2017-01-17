@@ -358,6 +358,26 @@ $for s in loaded:
 
 $$("#chooseDeck").html("Choose from " + ncards + " cards");
 
+	$$("#mod_create").click(function() {
+        var myObject = new Object();
+		myObject.name = $$("#mod_name").val();
+		myObject.url = $$("#mod_url").val();
+
+		jQuery.ajax({
+			type: "POST",
+            contentType: "application/json",
+            data: JSON.stringify(myObject),
+			success: function(data) {
+                if(data == 'fail') {
+                    alert("Failed to created mod");
+                } else {
+                    window.location.href = "/mod";
+                }
+			},
+		});
+		return false;
+	});
+
 	$$("#signin").click(function() {
 
         var myObject = new Object();
